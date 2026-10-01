@@ -112,24 +112,37 @@ jobs:
               }
             };
 
-            const rows = await Promise.all(schemes.map(async (path) => {
+            const entries = await Promise.all(schemes.map(async (path) => {
               const [system, file] = path.split("/");
               const { name, slug } = await readMeta(path);
               const safeSlug = slug.replace(/[^a-z0-9._-]/gi, "");
-              return `| ${code(name)} | ${code(safeSlug)} | ${system} ` +
+              const row = `| ${code(name)} | ${code(safeSlug)} ` +
                 `| [${code(file)}](${blobUrl(path)}) | [Open in Studio](${studioUrl(path)}) |`;
+              return { system, row };
             }));
+
+            // One table per system, in a fixed order.
+            const SYSTEMS = [["base16", "Base16"], ["base24", "Base24"], ["tinted8", "Tinted8"]];
+            const sections = SYSTEMS.flatMap(([system, label]) => {
+              const rows = entries.filter((e) => e.system === system).map((e) => e.row);
+              if (!rows.length) return [];
+              return [
+                `#### ${label}`,
+                "",
+                "| Scheme | Slug | YAML | Preview |",
+                "|---|---|---|---|",
+                ...rows,
+                "",
+              ];
+            });
 
             const body = [
               MARKER,
               "### Preview in Tinted Studio",
               "",
-              `Open each proposed scheme in [Tinted Studio](${STUDIO}) to see it in the editor, terminal and diff previews:`,
+              `Open each proposed scheme in [Tinted Studio](${STUDIO}) to see it in the editor, terminal and diff previews.`,
               "",
-              "| Scheme | Slug | System | YAML | Preview |",
-              "|---|---|---|---|---|",
-              ...rows,
-              "",
+              ...sections,
               `<sub>Links point to ${sha.slice(0, 7)} and update automatically when this PR changes.</sub>`,
             ].join("\n");
 
