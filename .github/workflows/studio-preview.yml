@@ -73,12 +73,13 @@ jobs:
               return `${STUDIO}#url=${encodeURIComponent(raw)}`;
             };
 
-            // Scheme files are untrusted text: escape before putting them in
-            // markdown so they can't break the table, inject links or @-mention.
-            const md = (s) => s
-              .slice(0, 80)
-              .replace(/[\u0000-\u001f]/g, "")
-              .replace(/[\\`*_{}[\]()<>#+!|~@]/g, "\\$&");
+            // Scheme files are untrusted text. Render names inside code spans:
+            // GitHub doesn't autolink URLs or turn @handles into mentions there.
+            // Strip backticks (can't close the span early) and escape `|` (table).
+            const code = (s) => {
+              const t = s.slice(0, 80).replace(/[\u0000-\u001f`]/g, "").replace(/\|/g, "\\|").trim();
+              return t ? `\`${t}\`` : "—";
+            };
             const slugify = (s) => s
               .normalize("NFKD")
               .replace(/[̀-ͯ]/g, "")
@@ -115,8 +116,8 @@ jobs:
               const [system, file] = path.split("/");
               const { name, slug } = await readMeta(path);
               const safeSlug = slug.replace(/[^a-z0-9._-]/gi, "");
-              return `| ${md(name) || "—"} | ${safeSlug ? `\`${safeSlug}\`` : "—"} | ${system} ` +
-                `| [${md(file)}](${blobUrl(path)}) | [Open in Studio](${studioUrl(path)}) |`;
+              return `| ${code(name)} | ${code(safeSlug)} | ${system} ` +
+                `| [${code(file)}](${blobUrl(path)}) | [Open in Studio](${studioUrl(path)}) |`;
             }));
 
             const body = [
