@@ -1,0 +1,97 @@
+name: Studio preview
+
+# Posts one comment per PR linking every added/changed scheme to Tinted Studio,
+# and keeps it in sync: updated on each push, deleted if the PR stops touching
+# schemes.
+#
+# Uses pull_request_target so fork PRs can be commented on. That is only safe
+# because this workflow never checks out or executes PR code — it reads the
+# PR's file list through the API and builds links.
+"on":
+  pull_request_target:
+    types: [opened, synchronize, reopened]
+    branches:
+      - "spec-**"
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: studio-preview-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  comment:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create, update or delete the preview comment
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const MARKER = "<!-- tinted-studio-preview -->";
+            const STUDIO = "https://tinted-theming.github.io/studio/";
+            const SCHEME_PATH = /^(base16|base24|tinted8)\/[^/]+\.ya?ml$/;
+
+            const pr = context.payload.pull_request;
+            const { owner, repo } = context.repo;
+            const issue_number = pr.number;
+
+            const files = await github.paginate(github.rest.pulls.listFiles, {
+              owner, repo, pull_number: issue_number, per_page: 100,
+            });
+            const schemes = files
+              .filter((f) => f.status !== "removed" && SCHEME_PATH.test(f.filename))
+              .map((f) => f.filename)
+              .sort();
+
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner, repo, issue_number, per_page: 100,
+            });
+            const existing = comments.find(
+              (c) => c.user?.login === "github-actions[bot]" && c.body?.includes(MARKER),
+            );
+
+            // The head repo is null if the fork was deleted; links would be dead.
+            const headRepo = pr.head.repo?.full_name;
+            if (!schemes.length || !headRepo) {
+              if (existing) {
+                await github.rest.issues.deleteComment({ owner, repo, comment_id: existing.id });
+                core.info(`Deleted stale preview comment ${existing.id}.`);
+              } else {
+                core.info("No added or changed schemes; nothing to do.");
+              }
+              return;
+            }
+
+            const sha = pr.head.sha;
+            const link = (path) => {
+              const raw = `https://raw.githubusercontent.com/${headRepo}/${sha}/` +
+                path.split("/").map(encodeURIComponent).join("/");
+              return `${STUDIO}#url=${encodeURIComponent(raw)}`;
+            };
+            const rows = schemes.map((path) => {
+              const [system, file] = path.split("/");
+              return `| ${system} | \`${file}\` | [Open in Studio](${link(path)}) |`;
+            });
+
+            const body = [
+              MARKER,
+              "### Preview in Tinted Studio",
+              "",
+              `Open each proposed scheme in [Tinted Studio](${STUDIO}) to see it in the editor, terminal and diff previews:`,
+              "",
+              "| System | File | Preview |",
+              "|---|---|---|",
+              ...rows,
+              "",
+              `<sub>Links point to ${sha.slice(0, 7)} and update automatically when this PR changes.</sub>`,
+            ].join("\n");
+
+            if (existing) {
+              await github.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body });
+              core.info(`Updated preview comment ${existing.id} (${schemes.length} scheme(s)).`);
+            } else {
+              const { data } = await github.rest.issues.createComment({ owner, repo, issue_number, body });
+              core.info(`Created preview comment ${data.id} (${schemes.length} scheme(s)).`);
+            }
