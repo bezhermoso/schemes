@@ -5,8 +5,8 @@ name: Studio preview
 # schemes.
 #
 # Uses pull_request_target so fork PRs can be commented on. That is only safe
-# because this workflow never checks out or executes PR code — it reads the
-# PR's file list through the API and builds links.
+# because this workflow never checks out or executes PR code — it only reads
+# the PR's file list and the changed scheme files' text through the API.
 "on":
   pull_request_target:
     types: [opened, synchronize, reopened]
@@ -65,15 +65,59 @@ jobs:
             }
 
             const sha = pr.head.sha;
-            const link = (path) => {
-              const raw = `https://raw.githubusercontent.com/${headRepo}/${sha}/` +
-                path.split("/").map(encodeURIComponent).join("/");
+            const [headOwner, headName] = headRepo.split("/");
+            const encPath = (path) => path.split("/").map(encodeURIComponent).join("/");
+            const blobUrl = (path) => `https://github.com/${headRepo}/blob/${sha}/${encPath(path)}`;
+            const studioUrl = (path) => {
+              const raw = `https://raw.githubusercontent.com/${headRepo}/${sha}/${encPath(path)}`;
               return `${STUDIO}#url=${encodeURIComponent(raw)}`;
             };
-            const rows = schemes.map((path) => {
+
+            // Scheme files are untrusted text: escape before putting them in
+            // markdown so they can't break the table, inject links or @-mention.
+            const md = (s) => s
+              .slice(0, 80)
+              .replace(/[\u0000-\u001f]/g, "")
+              .replace(/[\\`*_{}[\]()<>#+!|~@]/g, "\\$&");
+            const slugify = (s) => s
+              .normalize("NFKD")
+              .replace(/[̀-ͯ]/g, "")
+              .toLowerCase()
+              .replace(/[^a-z0-9]+/g, "-")
+              .replace(/^-+|-+$/g, "");
+            // A `key: value` line's value, unquoted, minus any trailing comment.
+            const field = (text, key) => {
+              const m = text.match(new RegExp(`^\\s*${key}:\\s*(.*)$`, "m"));
+              if (!m) return "";
+              const v = m[1].trim();
+              const quoted = v.match(/^(["'])(.*?)\1/);
+              return quoted ? quoted[2] : v.replace(/\s+#.*$/, "").trim();
+            };
+            // Read name/slug from the file at the PR head, as data only. Base16/24
+            // keep them top-level; Tinted8 nests them under `scheme:`.
+            const readMeta = async (path) => {
+              try {
+                const { data } = await github.rest.repos.getContent({
+                  owner: headOwner, repo: headName, path, ref: sha,
+                });
+                const text = Buffer.from(data.content, "base64").toString("utf8");
+                // Tinted8 may give family + style instead of a name.
+                const name = field(text, "name") ||
+                  [field(text, "family"), field(text, "style")].filter(Boolean).join(" ");
+                return { name, slug: field(text, "slug") || slugify(name) };
+              } catch (e) {
+                core.warning(`Could not read ${path}: ${e.message}`);
+                return { name: "", slug: "" };
+              }
+            };
+
+            const rows = await Promise.all(schemes.map(async (path) => {
               const [system, file] = path.split("/");
-              return `| ${system} | \`${file}\` | [Open in Studio](${link(path)}) |`;
-            });
+              const { name, slug } = await readMeta(path);
+              const safeSlug = slug.replace(/[^a-z0-9._-]/gi, "");
+              return `| ${md(name) || "—"} | ${safeSlug ? `\`${safeSlug}\`` : "—"} | ${system} ` +
+                `| [${md(file)}](${blobUrl(path)}) | [Open in Studio](${studioUrl(path)}) |`;
+            }));
 
             const body = [
               MARKER,
@@ -81,8 +125,8 @@ jobs:
               "",
               `Open each proposed scheme in [Tinted Studio](${STUDIO}) to see it in the editor, terminal and diff previews:`,
               "",
-              "| System | File | Preview |",
-              "|---|---|---|",
+              "| Scheme | Slug | System | YAML | Preview |",
+              "|---|---|---|---|---|",
               ...rows,
               "",
               `<sub>Links point to ${sha.slice(0, 7)} and update automatically when this PR changes.</sub>`,
