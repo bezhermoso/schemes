@@ -3,7 +3,7 @@ scheme:
   supports:
     styling-spec: "0.2.0"
   name: "Nord"
-  author: "Tinted Theming (https://github.com/tinted-theming)"
+  author: "Rehearsal Edit"
   theme-author: "Arctic Ice Studio (https://www.nordtheme.com)"
 variant: "dark"
 palette:
